@@ -1,0 +1,4 @@
+Running: srun build/GPU_app -f "data/download.jpeg" -m "RGB_to_grayscale"
+Image loaded successfully!!!
+Image dimensions: 148 x 263
+Image written successfully to data/download_processed.jpeg
