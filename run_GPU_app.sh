@@ -16,7 +16,7 @@
 FILE=""
 MODULE=""
 CHANNEL=""
-KERNEL=""
+INFO=""
 #parse arguments
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -32,13 +32,13 @@ while [[ $# -gt 0 ]]; do
       CHANNEL="$2"
       shift 2
       ;;
-    -k|--kernel)
-      KERNEL="$2"
+    -i|--info)
+      INFO="$2"
       shift 2
       ;;
     *)
       echo "Unknown option: $1"
-      echo "Usage: $0 -f <file> -m <module> -c <channel> -k <kernel>"
+      echo "Usage: $0 -f <file> -m <module> -c <channel> -i <info>"
       exit 1
       ;;
   esac
@@ -53,7 +53,7 @@ fi
 #build the command
 CMD="srun build/GPU_app -f \"$FILE\" -m \"$MODULE\""
 [ -n "$CHANNEL" ] && CMD="$CMD -c \"$CHANNEL\""
-[ -n "$KERNEL" ] && CMD="$CMD -k \"$KERNEL\""
+[ -n "$INFO" ] && CMD="$CMD -k \"$INFO\""
 #run the application
 echo "Running: $CMD"
 eval $CMD
