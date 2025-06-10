@@ -46,16 +46,33 @@ cv::Mat run_module(cv::Mat input_image,const int &extra_info,const std::string &
     }
     else if(module=="edge_detection"){
         int kernel_size=extra_info;
+        //temporary init as it only covers 3*3 kernels now
+        kernel_size=3;
+        std::cout<<"start edge detection"<<std::endl;
+        temp_image=input_image;
+        //convert to grayscale if it's RGB
+        if(!is_RGB){
+            std::cout<<"converting to grayscale"<<std::endl;
 
-        if(is_RGB)
-            mem_init(device_input,RGB_size,device_output,RGB_size,input_image);
-        else
-            mem_init(device_input,grayscale_size,device_output,grayscale_size,input_image);
+            mem_init(device_input,RGB_size,device_output,grayscale_size,input_image);
 
-        blur_kernel<<<grid_size,block_size>>>(device_input,device_output,width,height,kernel_size,is_RGB);
+            RGB_to_grayscale_kernel<<<grid_size,block_size>>>(device_input,device_output,width,height);
+            kernel_error_checker(cudaDeviceSynchronize(),"DeviceSynchronize");
+            
+            temp_image=mem_to_image(device_output,height,width,grayscale_size,false);
+
+            kernel_error_checker(cudaFree(device_input),"Free");
+            kernel_error_checker(cudaFree(device_output),"Free");
+            std::cout<<"convertion to grayscale done!"<<std::endl;
+        }
+        std::cout<<"applying the threshold"<<std::endl;
+        mem_init(device_input,grayscale_size,device_output,grayscale_size,temp_image);
+
+        edge_detection_kernel<<<grid_size,block_size>>>(device_input,device_output,width,height,kernel_size);
         kernel_error_checker(cudaDeviceSynchronize(),"DeviceSynchronize");
 
-        output_image=mem_to_image(device_output,height,width,grayscale_size,is_RGB);
+        output_image=mem_to_image(device_output,height,width,grayscale_size,false);
+        std::cout<<"edge detection has been done!"<<std::endl;
     }
     else if(module=="threshold"){
         int threshold=128; 
@@ -65,7 +82,7 @@ cv::Mat run_module(cv::Mat input_image,const int &extra_info,const std::string &
         }
         temp_image=input_image;
         //convert to grayscale if it's RGB
-        if(input_image.channels()!=1){
+        if(!is_RGB){
             std::cout<<"converting to grayscale"<<std::endl;
 
             mem_init(device_input,RGB_size,device_output,grayscale_size,input_image);
@@ -89,7 +106,21 @@ cv::Mat run_module(cv::Mat input_image,const int &extra_info,const std::string &
         std::cout<<"Threshold has been applied!"<<std::endl;
     }
     else if(module=="adjust_bright"){
+        std::cout<<"start adjusting brightness"<<std::endl;
 
+        int offset=extra_info;
+
+        if(is_RGB)
+            mem_init(device_input,RGB_size,device_output,RGB_size,input_image);
+        else
+            mem_init(device_input,grayscale_size,device_output,grayscale_size,input_image);
+
+        brightness_adjustment_kernel<<<grid_size,block_size>>>(device_input,device_output,width,height,offset,is_RGB);
+        kernel_error_checker(cudaDeviceSynchronize(),"DeviceSynchronize");
+        
+        output_image=mem_to_image(device_output,height,width,grayscale_size,is_RGB);
+
+        std::cout<<"brightness has been adjusted!"<<std::endl;
     }
     else{
         std::cerr<<"Module not found!"<<std::endl;
@@ -105,7 +136,7 @@ void kernel_error_checker(cudaError_t err, std::string method){
         exit(-1);
     }
 }
-void mem_init(unsigned char *input,int input_size,unsigned char *output,int output_size,cv::Mat image){
+void mem_init(unsigned char *&input,int input_size,unsigned char *&output,int output_size,cv::Mat &image){
     kernel_error_checker(cudaMalloc((void**)&input,input_size),"Malloc");
     kernel_error_checker(cudaMalloc((void**)&output,output_size),"Malloc");
     kernel_error_checker(cudaMemcpy(input,image.data,input_size,cudaMemcpyHostToDevice),"Memcpy");
@@ -146,18 +177,19 @@ __global__ void RGB_to_grayscale_kernel(unsigned char *input,unsigned char *outp
 __global__ void blur_kernel(unsigned char *input,unsigned char *output,int width,int height,int kernel_size,bool is_RGB){
     //TODO handle error for even sized kernels 
     int2 idx=find_index();
-    float *kernel;
+    __shared__ float kernel[100];
     //kernel construction
-    if(kernel_size%2==1){
-        kernel=(float*)malloc(kernel_size*kernel_size*sizeof(float));
-        
-        for(int i=0;i<kernel_size*kernel_size;i++)
-            kernel[i]=1.0/kernel_size*kernel_size;
-    }   
+    if(idx.x==0 && idx.y==0){
+        if(kernel_size%2==1){ 
+            for(int i=0;i<kernel_size*kernel_size;i++)
+                kernel[i]=1.0/(kernel_size*kernel_size);
+        }   
+    }
+    __syncthreads();
     if(idx.x<width && idx.y<height){
         image_kernel_convolution(input,output,width,height,idx.x,idx.y,kernel_size,kernel,is_RGB);
     }
-
+    
 }
 __global__ void thresholding_kernel(unsigned char *input,unsigned char *output,int width,int height,int threshold){
     int2 idx=find_index();
@@ -200,22 +232,13 @@ __global__ void brightness_adjustment_kernel(unsigned char *input,unsigned char 
             }
     }
 }
-__device__ void image_kernel_convolution(unsigned char *input,unsigned char *output,int width,int height,int x,int y,int kernel_size,float *kernel,bool is_RGB){
+__device__ void image_kernel_convolution(unsigned char *input,unsigned char *output,int width,int height,int x,int y,int kernel_size,int kernel_weight,float *kernel,bool is_RGB){
     //TODO pixel overflow handling
 
     int RGB_idx=(y*width+x)*3;
     int grayscale_idx=y*width+x;
 
-    //initialization
-    if(is_RGB){
-        output[RGB_idx]=static_cast<unsigned char>(0);
-        output[RGB_idx+1]=static_cast<unsigned char>(0);
-        output[RGB_idx+2]=static_cast<unsigned char>(0);
-    }
-    else{
-        output[grayscale_idx]=static_cast<unsigned char>(0);
-    }
-
+    float sum_r=0.0,sum_g=0.0,sum_b=0.0,sum_gray=0.0;
     for(int dy=0;dy<kernel_size;dy++)
         for(int dx=0;dx<kernel_size;dx++){
             int nx=x+dx-kernel_size/2;
@@ -225,48 +248,61 @@ __device__ void image_kernel_convolution(unsigned char *input,unsigned char *out
                 float weight=kernel[dy*kernel_size+dx];
                 if(is_RGB){
                     int nidx=(ny*width+nx)*3;
-                    output[RGB_idx]+=static_cast<unsigned char>(input[nidx]*weight);
-                    output[RGB_idx+1]+=static_cast<unsigned char>(input[nidx+1]*weight);
-                    output[RGB_idx+2]+=static_cast<unsigned char>(input[nidx+2]*weight);
+
+                    sum_r+=input[nidx];
+                    sum_g+=input[nidx+1];
+                    sum_b+=input[nidx+2];
                 }
                 else{
                     int nidx=ny*width+nx;
-                    output[grayscale_idx]+=static_cast<unsigned char>(input[grayscale_idx]*weight);
+
+                    sum_gray+=input[nidx];
                 }
                 
             }
         }
+    if(is_RGB){
+        output[RGB_idx]=static_cast<unsigned char>(sum_r/kernel_weight);
+        output[RGB_idx+1]=static_cast<unsigned char>(sum_g/kernel_weight);
+        output[RGB_idx+2]=static_cast<unsigned char>(sum_b/kernel_weight);
+    }
+    else{
+        output[grayscale_idx]=static_cast<unsigned char>(sum_gray/kernel_weight);
+    }    
 
 }
-__global__ void edge_detection_kernel(unsigned char *input,unsigned char *output,int width,int height,int kernel_size,bool is_RGB){
+__global__ void edge_detection_kernel(unsigned char *input,unsigned char *output,int width,int height,int kernel_size){
     //TODO handle error for even sized kernels 
     int2 idx=find_index();
-    float *kernel;
+    __shared__ float kernel[9];
     //kernel construction
-    if(kernel_size%2==1){
-        kernel=(float*)malloc(kernel_size*kernel_size*sizeof(float));
-        //kernel values
-        //x=0,y=0
-        kernel[0]=0;
-        //x=1,y=0
-        kernel[1]=-1;
-        //x=2,y=0
-        kernel[2]=0;
-        //x=0,y=1
-        kernel[3]=-1;
-        //x=1,y=1
-        kernel[4]=4;
-        //x=2,y=1
-        kernel[5]=-1;
-        //x=0,y=2
-        kernel[6]=0;
-        //x=1,y=2
-        kernel[7]=-1;
-        //x=2,y=2
-        kernel[8]=0;
-    }   
+    if(idx.x==0 && idx.y==0){
+        if(kernel_size%2==1){
+            //kernel values
+            //x=0,y=0
+            kernel[0]=0;
+            //x=1,y=0
+            kernel[1]=-1;
+            //x=2,y=0
+            kernel[2]=0;
+            //x=0,y=1
+            kernel[3]=-1;
+            //x=1,y=1
+            kernel[4]=4;
+            //x=2,y=1
+            kernel[5]=-1;
+            //x=0,y=2
+            kernel[6]=0;
+            //x=1,y=2
+            kernel[7]=-1;
+            //x=2,y=2
+            kernel[8]=0;
+        }
+    }
+    __syncthreads();
+
     if(idx.x<width && idx.y<height){
-        image_kernel_convolution(input,output,width,height,idx.x,idx.y,kernel_size,kernel,is_RGB);
+        image_kernel_convolution(input,output,width,height,idx.x,idx.y,kernel_size,kernel,false);
     }
 
 }

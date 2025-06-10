@@ -10,7 +10,7 @@ void parse(int argc,char* argv[]){
     ("m,module", "Process module that will be applied on the image \n \
       Available modules are (words have be given as option with exact same spelling and cases as mentioned below):\n \
         RGB_to_grayscale (no info needed )\n \
-        blur (no info needed / info specifies the kernel size [only 3*3 kernels are supported for now])\n \
+        blur (no info needed / info specifies the kernel size [up to 9, it has to be odd number])\n \
         threshold (info is needed: a positive number smaller than 255 as the threshold to be applied)\n \
         adjust_bright (info is needed: an integer between -255 and 255 to be added to the pixel values)\n \
         edge_detection (no info needed / info specifies the kernel size [only 3*3 kernels are supported for now])\n \

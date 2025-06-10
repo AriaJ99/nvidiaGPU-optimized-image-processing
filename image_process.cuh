@@ -13,8 +13,8 @@ __device__ int2 find_index();
 __global__ void blur_kernel(unsigned char *input,unsigned char *output,int width,int height,int kernel_size,bool is_RGB);
 __global__ void thresholding_kernel(unsigned char *input,unsigned char *output,int width,int height,int threshold);
 __global__ void brightness_adjustment_kernel(unsigned char *input,unsigned char *output,int width,int height,int offset,bool is_RGB);
-__device__ void image_kernel_convolution(unsigned char *input,unsigned char *output,int width,int height,int x,int y,int kernel_size,float *kernel,bool is_RGB);
-__global__ void edge_detection_kernel(unsigned char *input,unsigned char *output,int width,int height,int kernel_size,bool is_RGB);
-void mem_init(unsigned char *input,int input_size,unsigned char *output,int output_size,cv::Mat image);
+__device__ void image_kernel_convolution(unsigned char *input,unsigned char *output,int width,int height,int x,int y,int kernel_size,int kernel_weight,float *kernel,bool is_RGB);
+__global__ void edge_detection_kernel(unsigned char *input,unsigned char *output,int width,int height,int kernel_size);
+void mem_init(unsigned char *&input,int input_size,unsigned char *&output,int output_size,cv::Mat &image);
 cv::Mat mem_to_image(unsigned char *input,int height,int width,int size, bool is_RGB);
 #endif

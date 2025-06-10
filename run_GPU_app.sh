@@ -53,7 +53,7 @@ fi
 #build the command
 CMD="srun build/GPU_app -f \"$FILE\" -m \"$MODULE\""
 [ -n "$CHANNEL" ] && CMD="$CMD -c \"$CHANNEL\""
-[ -n "$INFO" ] && CMD="$CMD -k \"$INFO\""
+[ -n "$INFO" ] && CMD="$CMD -i \"$INFO\""
 #run the application
 echo "Running: $CMD"
 eval $CMD
