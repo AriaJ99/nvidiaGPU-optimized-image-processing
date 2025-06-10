@@ -45,13 +45,12 @@ cv::Mat run_module(cv::Mat input_image,const int &extra_info,const std::string &
         std::cout<<"image has been blurred!"<<std::endl;
     }
     else if(module=="edge_detection"){
-        int kernel_size=extra_info;
-        //temporary init as it only covers 3*3 kernels now
-        kernel_size=3;
+        int direction=extra_info;
+
         std::cout<<"start edge detection"<<std::endl;
         temp_image=input_image;
         //convert to grayscale if it's RGB
-        if(!is_RGB){
+        if(is_RGB){
             std::cout<<"converting to grayscale"<<std::endl;
 
             mem_init(device_input,RGB_size,device_output,grayscale_size,input_image);
@@ -67,9 +66,26 @@ cv::Mat run_module(cv::Mat input_image,const int &extra_info,const std::string &
         }
         std::cout<<"applying the threshold"<<std::endl;
         mem_init(device_input,grayscale_size,device_output,grayscale_size,temp_image);
+        if(direction==1 || direction==2){
+            edge_detection_kernel<<<grid_size,block_size>>>(device_input,device_output,width,height,direction);
+            kernel_error_checker(cudaDeviceSynchronize(),"DeviceSynchronize");
+        }
+        else{
+            unsigned char *vertical_device,*horizontal_device;
 
-        edge_detection_kernel<<<grid_size,block_size>>>(device_input,device_output,width,height,kernel_size);
-        kernel_error_checker(cudaDeviceSynchronize(),"DeviceSynchronize");
+            kernel_error_checker(cudaMalloc((void**)&vertical_device,grayscale_size),"Malloc");
+            kernel_error_checker(cudaMalloc((void**)&horizontal_device,grayscale_size),"Malloc");
+            
+            edge_detection_kernel<<<grid_size,block_size>>>(device_input,vertical_device,width,height,1);
+            kernel_error_checker(cudaDeviceSynchronize(),"DeviceSynchronize");
+            
+            edge_detection_kernel<<<grid_size,block_size>>>(device_input,horizontal_device,width,height,2);
+            kernel_error_checker(cudaDeviceSynchronize(),"DeviceSynchronize");
+
+            matrix_magnitude_kernel<<<grid_size,block_size>>>(device_output,vertical_device,horizontal_device,width,height);
+            kernel_error_checker(cudaDeviceSynchronize(),"DeviceSynchronize");
+
+        }
 
         output_image=mem_to_image(device_output,height,width,grayscale_size,false);
         std::cout<<"edge detection has been done!"<<std::endl;
@@ -82,7 +98,7 @@ cv::Mat run_module(cv::Mat input_image,const int &extra_info,const std::string &
         }
         temp_image=input_image;
         //convert to grayscale if it's RGB
-        if(!is_RGB){
+        if(is_RGB){
             std::cout<<"converting to grayscale"<<std::endl;
 
             mem_init(device_input,RGB_size,device_output,grayscale_size,input_image);
@@ -177,17 +193,15 @@ __global__ void RGB_to_grayscale_kernel(unsigned char *input,unsigned char *outp
 __global__ void blur_kernel(unsigned char *input,unsigned char *output,int width,int height,int kernel_size,bool is_RGB){
     //TODO handle error for even sized kernels 
     int2 idx=find_index();
-    __shared__ float kernel[100];
+    __shared__ float kernel[625];
     //kernel construction
-    if(idx.x==0 && idx.y==0){
-        if(kernel_size%2==1){ 
-            for(int i=0;i<kernel_size*kernel_size;i++)
-                kernel[i]=1.0/(kernel_size*kernel_size);
-        }   
-    }
+    for(int i=0;i<kernel_size*kernel_size;i++)
+        kernel[i]=1.0;
+    
     __syncthreads();
+
     if(idx.x<width && idx.y<height){
-        image_kernel_convolution(input,output,width,height,idx.x,idx.y,kernel_size,kernel,is_RGB);
+        image_kernel_convolution(input,output,width,height,idx.x,idx.y,kernel_size,kernel_size*kernel_size,kernel,is_RGB);
     }
     
 }
@@ -249,60 +263,64 @@ __device__ void image_kernel_convolution(unsigned char *input,unsigned char *out
                 if(is_RGB){
                     int nidx=(ny*width+nx)*3;
 
-                    sum_r+=input[nidx];
-                    sum_g+=input[nidx+1];
-                    sum_b+=input[nidx+2];
+                    sum_r+=input[nidx]*weight;
+                    sum_g+=input[nidx+1]*weight;
+                    sum_b+=input[nidx+2]*weight;
                 }
                 else{
                     int nidx=ny*width+nx;
 
-                    sum_gray+=input[nidx];
+                    sum_gray+=input[nidx]*weight;
                 }
                 
             }
         }
     if(is_RGB){
-        output[RGB_idx]=static_cast<unsigned char>(sum_r/kernel_weight);
-        output[RGB_idx+1]=static_cast<unsigned char>(sum_g/kernel_weight);
-        output[RGB_idx+2]=static_cast<unsigned char>(sum_b/kernel_weight);
+        output[RGB_idx]=static_cast<unsigned char>(max(0,min(static_cast<int>(sum_r/kernel_weight),255)));
+        output[RGB_idx+1]=static_cast<unsigned char>(max(0,min(255,static_cast<int>(sum_g/kernel_weight))));
+        output[RGB_idx+2]=static_cast<unsigned char>(max(0,min(static_cast<int>(sum_b/kernel_weight),255)));
     }
     else{
-        output[grayscale_idx]=static_cast<unsigned char>(sum_gray/kernel_weight);
+        output[grayscale_idx]=static_cast<unsigned char>(max(0,min(static_cast<int>(sum_gray/kernel_weight),255)));
     }    
 
 }
-__global__ void edge_detection_kernel(unsigned char *input,unsigned char *output,int width,int height,int kernel_size){
+__global__ void edge_detection_kernel(unsigned char *input,unsigned char *output,int width,int height,int direction){
     //TODO handle error for even sized kernels 
     int2 idx=find_index();
-    __shared__ float kernel[9];
+    __shared__ float kernel_sobel_y[9],kernel_sobel_x[9];
     //kernel construction
-    if(idx.x==0 && idx.y==0){
-        if(kernel_size%2==1){
-            //kernel values
-            //x=0,y=0
-            kernel[0]=0;
-            //x=1,y=0
-            kernel[1]=-1;
-            //x=2,y=0
-            kernel[2]=0;
-            //x=0,y=1
-            kernel[3]=-1;
-            //x=1,y=1
-            kernel[4]=4;
-            //x=2,y=1
-            kernel[5]=-1;
-            //x=0,y=2
-            kernel[6]=0;
-            //x=1,y=2
-            kernel[7]=-1;
-            //x=2,y=2
-            kernel[8]=0;
-        }
-    }
+    //kernel values
+    // sobel x -1   0   1
+    //         -2   0   2
+    //         -1   0   1
+    kernel_sobel_x[0]=-1,   kernel_sobel_x[1]=0,    kernel_sobel_x[2]=1;  
+    kernel_sobel_x[3]=-2,   kernel_sobel_x[4]=0,    kernel_sobel_x[5]=2;
+    kernel_sobel_x[6]=-1,   kernel_sobel_x[7]=0,   kernel_sobel_x[8]=1;
+
+    // sobel y -1   -2   -1
+    //          0    0    0
+    //          1    2    1
+    kernel_sobel_y[0]=-1,   kernel_sobel_y[1]=-2,    kernel_sobel_y[2]=-1;  
+    kernel_sobel_y[3]=-0,   kernel_sobel_y[4]=0,    kernel_sobel_y[5]=0;
+    kernel_sobel_y[6]=1,   kernel_sobel_y[7]=2,   kernel_sobel_y[8]=1;
+
     __syncthreads();
 
     if(idx.x<width && idx.y<height){
-        image_kernel_convolution(input,output,width,height,idx.x,idx.y,kernel_size,kernel,false);
+        if(direction==1)
+            image_kernel_convolution(input,output,width,height,idx.x,idx.y,3,1,kernel_sobel_x,false);
+        else if(direction==2)
+            image_kernel_convolution(input,output,width,height,idx.x,idx.y,3,1,kernel_sobel_y,false);
+
     }
 
+
+}
+__global__  void matrix_magnitude_kernel(unsigned char *destination,unsigned char *matrix_1,unsigned char *matrix_2,int width,int height){
+    int2 idx=find_index();
+    if(idx.y<height && idx.x<width){
+        int index=idx.y*width+idx.x;
+        destination[index]=min(255,static_cast<int>(sqrtf(matrix_1[index]*matrix_1[index]+matrix_2[index]*matrix_2[index])));
+    }
 }

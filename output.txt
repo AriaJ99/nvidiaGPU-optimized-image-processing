@@ -1,6 +1,6 @@
-Running: srun build/GPU_app -f "data/download.jpeg" -m "RGB_to_grayscale"
+Running: srun build/GPU_app -f "data/simple_image.png" -m "RGB_to_grayscale"
 Image loaded successfully!!!
-Image dimensions: 148 x 263
+Image dimensions: 1100 x 1500
 converting to grayscale
 convertion to grayscale done!
-Image written successfully to data/download_RGB_to_grayscale_processed.jpeg
+Image written successfully to data/simple_image_RGB_to_grayscale_processed.png
