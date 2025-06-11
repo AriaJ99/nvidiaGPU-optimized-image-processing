@@ -1,6 +1,6 @@
-Running: srun build/GPU_app -f "data/simple_image.png" -m "RGB_to_grayscale"
+Running: srun build/GPU_app -f "data/download.jpeg" -m "edge_sharpening"
 Image loaded successfully!!!
-Image dimensions: 1100 x 1500
-converting to grayscale
-convertion to grayscale done!
-Image written successfully to data/simple_image_RGB_to_grayscale_processed.png
+Image dimensions: 148 x 263
+start edge sharpening
+edge sharpening has been done!
+Image written successfully to data/download_edge_sharpening_processed.jpeg

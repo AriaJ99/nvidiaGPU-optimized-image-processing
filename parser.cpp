@@ -5,18 +5,25 @@ using namespace std;
 void parse(int argc,char* argv[]){
     cxxopts::Options options("GPU-image-processing", "Using Nvidia GPU to perform some image processing functions");
     options.add_options()
-    ("i,info", "Extra info that might be needed for some modules", cxxopts::value<int>()->default_value("3"))
+    ("i,info", "Extra info that might be needed for some modules", cxxopts::value<string>()->default_value("3"))
     ("f,file", "File path to the image", cxxopts::value<std::string>())
     ("m,module", "Process module that will be applied on the image \n \
       Available modules are (words have be given as option with exact same spelling and cases as mentioned below):\n \
-        RGB_to_grayscale (no info needed )\n \
-        blur (no info needed / info specifies the kernel size [up to 25, it has to be odd number])\n \
-        threshold (info is needed: a positive number smaller than 255 as the threshold to be applied)\n \
-        adjust_bright (info is needed: an integer between -255 and 255 to be added to the pixel values)\n \
-        edge_detection (no info needed / info specifies the direction, with 1 for vertical edges,\n \
-                                           2 for horizontal edges and any other value for both)\n \
+        [RGB_to_grayscale] (no info needed)\n \
+        ----------------------------------------\n \
+        [blur] (no info needed / info specifies the kernel size [up to 25, it has to be an odd number])\n \
+        ----------------------------------------\n \
+        [threshold] (info is needed: a positive number smaller than 255 as the threshold to be applied)\n \
+        ----------------------------------------\n \
+        [adjust_bright] (info is needed: an integer between -255 and 255 to be added to the pixel values)\n \
+        ----------------------------------------\n \
+        [edge_detection] (no info needed / info specifies the method, available methods are:\n \
+            [sobel]{default}, [prewitt], [robert])\n \
+        ----------------------------------------\n \
+        [edge_sharpening] (no info needed)\n \
+        ----------------------------------------\n \
       ", cxxopts::value<std::string>())
-    ("c,channel","Number of image channel (only needed if image is grayscale)",cxxopts::value<std::string>()->default_value("RGB"))
+    ("c,channel","Number of image channels (only needed if the image is grayscale. RGB[3], grayscale[1])",cxxopts::value<int>()->default_value("3"))
     ("h,help", "Application guide")
   ;
   if (argc==1) {
@@ -35,24 +42,28 @@ void parse(int argc,char* argv[]){
 
 void run_process(cxxopts::ParseResult &result){
     string image_file_path=result["f"].as<string>();
-    int kernel_size=result["i"].as<int>();
+    string info=result["i"].as<string>();
     string module=result["m"].as<string>();
-    string channel=result["c"].as<string>();
+    int channel=result["c"].as<int>();
     //load the image 
     cv::Mat input_image=read_image(image_file_path,channel);
     //run the module
     cv::Mat output_image;
-    output_image=run_module(input_image,kernel_size,module);
+    output_image=run_module(input_image,info,module);
     //save the output
     std::string output_image_path=processed_image_path_maker(image_file_path,module);
     write_image(output_image,output_image_path);
 }
-cv::Mat read_image(const string &image_path,const string &channel){
+cv::Mat read_image(const string &image_path,const int &channel){
   cv::Mat image;
-  if(channel=="RGB")
+  if(channel==3)
     image=cv::imread(image_path,cv::IMREAD_COLOR);
-  else
+  else if(channel==1)
     image=cv::imread(image_path,cv::IMREAD_GRAYSCALE);
+  else{
+    std::cerr<<"Invalid number of channels"<<std::endl;
+    exit(-3);
+  }
       if(image.empty())
     {
         std::cerr << "Error: Could not read the image: " << image_path << std::endl;

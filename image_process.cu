@@ -1,6 +1,6 @@
 #include "image_process.cuh"
 
-cv::Mat run_module(cv::Mat input_image,const int &extra_info,const std::string &module){
+cv::Mat run_module(cv::Mat input_image,const std::string &extra_info,const std::string &module){
     cv::Mat output_image;
     cv::Mat temp_image;
     //image dims
@@ -30,7 +30,7 @@ cv::Mat run_module(cv::Mat input_image,const int &extra_info,const std::string &
     else if(module=="blur"){
         std::cout<<"start blurring"<<std::endl;
 
-        int kernel_size=extra_info;
+        int kernel_size=std::stoi(extra_info);
 
         if(is_RGB)
             mem_init(device_input,RGB_size,device_output,RGB_size,input_image);
@@ -45,10 +45,23 @@ cv::Mat run_module(cv::Mat input_image,const int &extra_info,const std::string &
         std::cout<<"image has been blurred!"<<std::endl;
     }
     else if(module=="edge_detection"){
-        int direction=extra_info;
+        
+        int method;
+
+        if(extra_info=="sobel")
+            method=SOBEL;
+        else if(extra_info=="prewitt")
+            method=PREWITT;
+        else if(extra_info=="robert")
+            method=ROBERT;
+        else
+            method=SOBEL;
+
 
         std::cout<<"start edge detection"<<std::endl;
         temp_image=input_image;
+
+        unsigned char *vertical_device,*horizontal_device;
         //convert to grayscale if it's RGB
         if(is_RGB){
             std::cout<<"converting to grayscale"<<std::endl;
@@ -64,38 +77,32 @@ cv::Mat run_module(cv::Mat input_image,const int &extra_info,const std::string &
             kernel_error_checker(cudaFree(device_output),"Free");
             std::cout<<"convertion to grayscale done!"<<std::endl;
         }
-        std::cout<<"applying the threshold"<<std::endl;
+
         mem_init(device_input,grayscale_size,device_output,grayscale_size,temp_image);
-        if(direction==1 || direction==2){
-            edge_detection_kernel<<<grid_size,block_size>>>(device_input,device_output,width,height,direction);
-            kernel_error_checker(cudaDeviceSynchronize(),"DeviceSynchronize");
-        }
-        else{
-            unsigned char *vertical_device,*horizontal_device;
 
-            kernel_error_checker(cudaMalloc((void**)&vertical_device,grayscale_size),"Malloc");
-            kernel_error_checker(cudaMalloc((void**)&horizontal_device,grayscale_size),"Malloc");
-            
-            edge_detection_kernel<<<grid_size,block_size>>>(device_input,vertical_device,width,height,1);
-            kernel_error_checker(cudaDeviceSynchronize(),"DeviceSynchronize");
-            
-            edge_detection_kernel<<<grid_size,block_size>>>(device_input,horizontal_device,width,height,2);
-            kernel_error_checker(cudaDeviceSynchronize(),"DeviceSynchronize");
+        kernel_error_checker(cudaMalloc((void**)&vertical_device,grayscale_size),"Malloc");
+        kernel_error_checker(cudaMalloc((void**)&horizontal_device,grayscale_size),"Malloc");
+        
 
-            matrix_magnitude_kernel<<<grid_size,block_size>>>(device_output,vertical_device,horizontal_device,width,height);
-            kernel_error_checker(cudaDeviceSynchronize(),"DeviceSynchronize");
-
-        }
+        edge_detection_kernel<<<grid_size,block_size>>>(device_input,vertical_device,width,height,1,method);
+        kernel_error_checker(cudaDeviceSynchronize(),"DeviceSynchronize");
+        
+        edge_detection_kernel<<<grid_size,block_size>>>(device_input,horizontal_device,width,height,2,method);
+        kernel_error_checker(cudaDeviceSynchronize(),"DeviceSynchronize");
+        
+        matrix_magnitude_kernel<<<grid_size,block_size>>>(device_output,vertical_device,horizontal_device,width,height);
+        kernel_error_checker(cudaDeviceSynchronize(),"DeviceSynchronize");
 
         output_image=mem_to_image(device_output,height,width,grayscale_size,false);
         std::cout<<"edge detection has been done!"<<std::endl;
     }
     else if(module=="threshold"){
-        int threshold=128; 
-        if(0<=extra_info && extra_info<=255){
-            threshold=extra_info;
-            std::cout<<"Threshold value: "<<threshold<<std::endl;
-        }
+        int threshold=std::stoi(extra_info);
+        if(!(0<=threshold && threshold<=255))
+            threshold=128;
+
+        std::cout<<"Threshold value: "<<threshold<<std::endl;
+
         temp_image=input_image;
         //convert to grayscale if it's RGB
         if(is_RGB){
@@ -124,7 +131,7 @@ cv::Mat run_module(cv::Mat input_image,const int &extra_info,const std::string &
     else if(module=="adjust_bright"){
         std::cout<<"start adjusting brightness"<<std::endl;
 
-        int offset=extra_info;
+        int offset=std::stoi(extra_info);
 
         if(is_RGB)
             mem_init(device_input,RGB_size,device_output,RGB_size,input_image);
@@ -137,6 +144,22 @@ cv::Mat run_module(cv::Mat input_image,const int &extra_info,const std::string &
         output_image=mem_to_image(device_output,height,width,grayscale_size,is_RGB);
 
         std::cout<<"brightness has been adjusted!"<<std::endl;
+    }
+    else if(module=="edge_sharpening"){
+        
+        std::cout<<"start edge sharpening"<<std::endl;
+ 
+        if(is_RGB)
+            mem_init(device_input,RGB_size,device_output,RGB_size,input_image);
+        else
+            mem_init(device_input,grayscale_size,device_output,grayscale_size,input_image);
+
+        edge_sharpening_kernel<<<grid_size,block_size>>>(device_input,device_output,width,height,is_RGB);
+        kernel_error_checker(cudaDeviceSynchronize(),"DeviceSynchronize");
+        
+        output_image=mem_to_image(device_output,height,width,grayscale_size,is_RGB);
+
+        std::cout<<"edge sharpening has been done!"<<std::endl;
     }
     else{
         std::cerr<<"Module not found!"<<std::endl;
@@ -285,35 +308,73 @@ __device__ void image_kernel_convolution(unsigned char *input,unsigned char *out
     }    
 
 }
-__global__ void edge_detection_kernel(unsigned char *input,unsigned char *output,int width,int height,int direction){
+__global__ void edge_detection_kernel(unsigned char *input,unsigned char *output,int width,int height,int direction,int method){
     //TODO handle error for even sized kernels 
     int2 idx=find_index();
-    __shared__ float kernel_sobel_y[9],kernel_sobel_x[9];
+
+    if(idx.x>=width || idx.y>=height)
+        return;
+    __shared__ float kernel_y[9],kernel_x[9];
     //kernel construction
-    //kernel values
-    // sobel x -1   0   1
-    //         -2   0   2
-    //         -1   0   1
-    kernel_sobel_x[0]=-1,   kernel_sobel_x[1]=0,    kernel_sobel_x[2]=1;  
-    kernel_sobel_x[3]=-2,   kernel_sobel_x[4]=0,    kernel_sobel_x[5]=2;
-    kernel_sobel_x[6]=-1,   kernel_sobel_x[7]=0,   kernel_sobel_x[8]=1;
+    if(method==SOBEL){
+        //kernel values
+        // Sobel x -1   0   1
+        //         -2   0   2
+        //         -1   0   1
+        kernel_x[0]=-1,   kernel_x[1]=0,    kernel_x[2]=1;  
+        kernel_x[3]=-2,   kernel_x[4]=0,    kernel_x[5]=2;
+        kernel_x[6]=-1,   kernel_x[7]=0,    kernel_x[8]=1;
 
-    // sobel y -1   -2   -1
-    //          0    0    0
-    //          1    2    1
-    kernel_sobel_y[0]=-1,   kernel_sobel_y[1]=-2,    kernel_sobel_y[2]=-1;  
-    kernel_sobel_y[3]=-0,   kernel_sobel_y[4]=0,    kernel_sobel_y[5]=0;
-    kernel_sobel_y[6]=1,   kernel_sobel_y[7]=2,   kernel_sobel_y[8]=1;
-
-    __syncthreads();
-
-    if(idx.x<width && idx.y<height){
-        if(direction==1)
-            image_kernel_convolution(input,output,width,height,idx.x,idx.y,3,1,kernel_sobel_x,false);
-        else if(direction==2)
-            image_kernel_convolution(input,output,width,height,idx.x,idx.y,3,1,kernel_sobel_y,false);
+        // Sobel y -1  -2  -1
+        //          0   0   0
+        //          1   2   1
+        kernel_y[0]=-1,   kernel_y[1]=-2,    kernel_y[2]=-1;  
+        kernel_y[3]=0,    kernel_y[4]=0,     kernel_y[5]=0;
+        kernel_y[6]=1,    kernel_y[7]=2,     kernel_y[8]=1;
 
     }
+    else if(method==PREWITT){
+        //kernel values
+        // Prewitt x 1   0  -1
+        //           1   0  -1
+        //           1   0  -1
+        kernel_x[0]=1,   kernel_x[1]=0,    kernel_x[2]=-1;  
+        kernel_x[3]=1,   kernel_x[4]=0,    kernel_x[5]=-1;
+        kernel_x[6]=1,   kernel_x[7]=0,    kernel_x[8]=-1;
+
+        // Prewitt y  1   1   1
+        //            0   0   0
+        //           -1  -1  -1
+        kernel_y[0]=1,   kernel_y[1]=1,    kernel_y[2]=1;  
+        kernel_y[3]=0,   kernel_y[4]=0,    kernel_y[5]=0;
+        kernel_y[6]=-1,  kernel_y[7]=-1,   kernel_y[8]=-1;
+
+    }
+    else if(method==ROBERT){
+        //kernel values
+        // Robert x  0   0   0
+        //           0   1   0
+        //           0   0   -1
+        kernel_x[0]=0,   kernel_x[1]=0,    kernel_x[2]=0;  
+        kernel_x[3]=0,   kernel_x[4]=1,    kernel_x[5]=0;
+        kernel_x[6]=0,   kernel_x[7]=0,    kernel_x[8]=-1;
+       // Robert x  0   0   0
+        //          0   0   1
+        //          0  -1   0
+        kernel_y[0]=0,   kernel_y[1]=0,    kernel_y[2]=0;  
+        kernel_y[3]=0,   kernel_y[4]=0,    kernel_y[5]=1;
+        kernel_y[6]=0,   kernel_y[7]=-1,   kernel_y[8]=0;
+
+    }
+    __syncthreads();
+
+
+    if(direction==1)
+        image_kernel_convolution(input,output,width,height,idx.x,idx.y,3,1,kernel_x,false);
+    else if(direction==2)
+        image_kernel_convolution(input,output,width,height,idx.x,idx.y,3,1,kernel_y,false);
+
+
 
 
 }
@@ -323,4 +384,28 @@ __global__  void matrix_magnitude_kernel(unsigned char *destination,unsigned cha
         int index=idx.y*width+idx.x;
         destination[index]=min(255,static_cast<int>(sqrtf(matrix_1[index]*matrix_1[index]+matrix_2[index]*matrix_2[index])));
     }
+}
+__global__ void edge_sharpening_kernel(unsigned char *input,unsigned char *output,int width,int height,bool is_RGB){
+    int2 idx=find_index();
+
+    if(idx.x>=width || idx.y>=height)
+        return;
+
+    __shared__ float kernel[9];
+
+    //kernel values
+    // Laplacian    0   -1   0
+    //             -1    5  -1
+    //              0   -1   0
+    kernel[0]=0,   kernel[1]=-1,    kernel[2]=0;  
+    kernel[3]=-1,   kernel[4]=5,    kernel[5]=-1;
+    kernel[6]=0,   kernel[7]=-1,    kernel[8]=0;
+    
+    __syncthreads();
+    
+
+    image_kernel_convolution(input,output,width,height,idx.x,idx.y,3,1,kernel,is_RGB);
+
+    
+
 }
